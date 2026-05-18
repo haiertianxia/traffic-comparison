@@ -1,0 +1,32 @@
+comparison_service_url: "http://localhost:8080"
+
+rules:
+  - name: user-service-shadow
+    old_service: old-service
+    namespace: default
+    targets:
+      - name: new-v1
+        url: http://localhost:9002
+        weight: 50
+        version: "v2.0.0"
+      - name: new-v2
+        url: http://localhost:9003
+        weight: 50
+        version: "v3.1.0"
+    endpoints:
+      - path: "/api/v1/users/"
+        method: GET
+        ignore_fields:
+          - "$.timestamp"
+          - "$.request_id"
+          - "$.data[0].score"
+          - "$.data[0].meta.tier_code"
+          - "$.data[1].score"
+          - "$.data[1].meta.tier_code"
+          - "$.server"
+      - path: "/api/v1/products/"
+        method: GET
+        ignore_fields:
+          - "$.timestamp"
+    sampling_rate: 1.0
+    timeout_ms: 5000
