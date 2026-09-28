@@ -1,0 +1,383 @@
+# traffic-comparison K8s deployment manifest
+# ─────────────────────────────────────────────
+# Services included:
+#   old-service      (9001) — baseline production service
+#   new-service-v1  (9002) — v2.0.0, body differences
+#   new-service-v2  (9003) — v3.1.0, slow + 500 errors
+#   comparison-service (8070) — diff engine + Loki reporting
+#   sidecar         (8090) — traffic mirror sidecar
+#
+# NOTE: Replace image fields with your actual image URIs before deploying.
+# For Alibaba Cloud ACK, push images to ACR first:
+#   docker build -t <acr-server>/traffic-comparison/<service>:latest .
+#   docker push <acr-server>/traffic-comparison/<service>:latest
+# ─────────────────────────────────────────────
+
+---
+# old-service — baseline production service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: old-service
+  namespace: default
+  labels:
+    app: old-service
+    version: v1.2.3
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: old-service
+  template:
+    metadata:
+      labels:
+        app: old-service
+        version: v1.2.3
+    spec:
+      containers:
+        - name: old-service
+          # TODO: Replace with your image, e.g. <acr>/traffic-comparison/old-service:latest
+          image: traffic-comparison/old-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9001
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "9001"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 9001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9001
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: old-service
+  namespace: default
+  labels:
+    app: old-service
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9001
+      targetPort: 9001
+      protocol: TCP
+      name: http
+  selector:
+    app: old-service
+
+---
+# new-service-v1 — v2.0.0 (body differences)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: new-service-v1
+  namespace: default
+  labels:
+    app: new-service-v1
+    version: v2.0.0
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: new-service-v1
+  template:
+    metadata:
+      labels:
+        app: new-service-v1
+        version: v2.0.0
+    spec:
+      containers:
+        - name: new-service-v1
+          # TODO: Replace with your image
+          image: traffic-comparison/new-service-v1:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9002
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "9002"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 9002
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9002
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: new-service-v1
+  namespace: default
+  labels:
+    app: new-service-v1
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9002
+      targetPort: 9002
+      protocol: TCP
+      name: http
+  selector:
+    app: new-service-v1
+
+---
+# new-service-v2 — v3.1.0 (slow + 500 errors)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: new-service-v2
+  namespace: default
+  labels:
+    app: new-service-v2
+    version: v3.1.0
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: new-service-v2
+  template:
+    metadata:
+      labels:
+        app: new-service-v2
+        version: v3.1.0
+    spec:
+      containers:
+        - name: new-service-v2
+          # TODO: Replace with your image
+          image: traffic-comparison/new-service-v2:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9003
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "9003"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 9003
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9003
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: new-service-v2
+  namespace: default
+  labels:
+    app: new-service-v2
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9003
+      targetPort: 9003
+      protocol: TCP
+      name: http
+  selector:
+    app: new-service-v2
+
+---
+# comparison-service — diff engine
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: comparison-service
+  namespace: default
+  labels:
+    app: comparison-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: comparison-service
+  template:
+    metadata:
+      labels:
+        app: comparison-service
+      annotations:
+        # Prometheus scrape annotation (optional, for Prometheus scraping)
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8070"
+        prometheus.io/path: "/health"
+    spec:
+      containers:
+        - name: comparison-service
+          # TODO: Replace with your image
+          image: traffic-comparison/comparison-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8070
+              protocol: TCP
+              name: http
+          env:
+            - name: CONFIG_PATH
+              value: "/config/config.yaml"
+            - name: LOKI_URL
+              # TODO: Replace with your Loki endpoint (e.g. http://loki-gateway.loki:3100)
+              value: ""
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8070
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8070
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: traffic-comparison-config
+            items:
+              - key: config.yaml
+                path: config.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: comparison-service
+  namespace: default
+  labels:
+    app: comparison-service
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8070
+      targetPort: 8070
+      protocol: TCP
+      name: http
+  selector:
+    app: comparison-service
+
+---
+# sidecar — traffic mirror sidecar
+# Deploy as a sidecar alongside your application workloads.
+# Alternatively, use the MutatingWebhookConfiguration (sidecar-injector.yaml)
+# to auto-inject the sidecar into all namespaces/pods.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sidecar
+  namespace: default
+  labels:
+    app: sidecar
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sidecar
+  template:
+    metadata:
+      labels:
+        app: sidecar
+    spec:
+      containers:
+        - name: sidecar
+          # TODO: Replace with your image
+          image: traffic-comparison/sidecar:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8090
+              protocol: TCP
+              name: http-mirror
+          env:
+            - name: COMPARISON_URL
+              value: "http://comparison-service:8070"
+            - name: OLD_SERVICE_URL
+              # NOTE: Change this to point to your actual old-service in each deployment.
+              # For the demo test pod, use the old-service ClusterIP or DNS name.
+              value: "http://old-service:9001"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8090
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8090
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sidecar
+  namespace: default
+  labels:
+    app: sidecar
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8090
+      targetPort: 8090
+      protocol: TCP
+      name: http-mirror
+  selector:
+    app: sidecar

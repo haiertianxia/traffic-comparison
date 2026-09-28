@@ -1,0 +1,185 @@
+# MutatingWebhookConfiguration — automatic sidecar injection
+# ─────────────────────────────────────────────────────────────
+# Apply this after building and pushing the sidecar image to your registry.
+# It injects the traffic-mirror-sidecar into every pod in namespaces matching
+# the label selector (configurable via namespaceSelector).
+#
+# IMPORTANT: Update image field before applying.
+#
+# Usage:
+#   kubectl apply -f sidecar-injector.yaml
+# ─────────────────────────────────────────────────────────────
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: traffic-sidecar-injector
+  labels:
+    app: traffic-sidecar
+    version: v1.0.0
+webhooks:
+  - name: sidecar.traffic-comparison.dev
+    clientConfig:
+      # TODO: Update to your admission webhook service URL.
+      # Format: https://<service>.<namespace>.svc:443
+      # For a cluster-local webhook server, create a Deployment + Service first.
+      # Alternatively, use an external webhook endpoint.
+      service:
+        name: sidecar-webhook
+        namespace: default
+        path: "/inject"
+      # For caBundle, either:
+      #   1. Leave empty if webhook server handles cert verification differently
+      #   2. Or provide base64-encoded CA cert: {{ caBundle }}
+      caBundle: ""
+    rules:
+      - operations: ["CREATE"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+    failurePolicy: Ignore   # Fail open so unhandled errors don't block pod creation
+    matchPolicy: Equivalent
+    reinvocationPolicy: IfNeeded
+    sideEffects: None
+    timeoutSeconds: 10
+    namespaceSelector:
+      # Inject into all namespaces by default.
+      # To exclude certain namespaces:
+      #   matchExpressions:
+      #     - key: kubernetes.io/metadata.name
+      #       operator: NotIn
+      #       values: ["kube-system", "kube-public"]
+      matchLabels:
+        inject-sidecar: "true"
+      # Or use matchExpressions to exclude specific namespaces:
+      # matchExpressions:
+      #   - key: kubernetes.io/metadata.name
+      #     operator: NotIn
+      #     values: ["kube-system", "istio-system"]
+
+---
+# Optional: webhook server Deployment + Service
+# Deploy this if you want a cluster-internal admission webhook server.
+# The webhook server receives pod specs and rewrites them to include the sidecar.
+#
+# For production use, consider:
+#   - Cert-manager for automatic TLS certificate provisioning
+#   - A dedicated namespace (e.g., traffic-comparison-system)
+#   - RBAC bindings for the webhook service account
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sidecar-webhook
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sidecar-webhook
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sidecar-webhook
+subjects:
+  - kind: ServiceAccount
+    name: sidecar-webhook
+    namespace: default
+roleRef:
+  kind: ClusterRole
+  name: sidecar-webhook
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sidecar-webhook
+  namespace: default
+  labels:
+    app: sidecar-webhook
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sidecar-webhook
+  template:
+    metadata:
+      labels:
+        app: sidecar-webhook
+    spec:
+      serviceAccountName: sidecar-webhook
+      containers:
+        - name: webhook
+          image: traffic-comparison/sidecar-webhook-server:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8443
+              name: https
+          env:
+            - name: SIDECAR_IMAGE
+              # TODO: Replace with your sidecar image full path
+              value: "<your-registry>/traffic-comparison/sidecar:latest"
+            - name: SIDECAR_PORT
+              value: "8090"
+            - name: COMPARISON_URL
+              value: "http://comparison-service:8070"
+            - name: OLD_SERVICE_URL
+              value: "http://old-service:9001"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sidecar-webhook
+  namespace: default
+  labels:
+    app: sidecar-webhook
+spec:
+  type: ClusterIP
+  ports:
+    - port: 443
+      targetPort: 8443
+      protocol: TCP
+      name: https
+  selector:
+    app: sidecar-webhook
+
+---
+# Annotations reference for manual sidecar injection (without webhook):
+#
+# To manually inject the sidecar into a pod spec (kubectl edit, Kustomize, etc.):
+#
+# podAnnotations:
+#   traffic.sidecar/inject: "true"
+#
+# In pod spec (add as initContainers or regular containers):
+#   containers:
+#     - name: traffic-mirror-sidecar
+#       image: <your-registry>/traffic-comparison/sidecar:latest
+#       imagePullPolicy: IfNotPresent
+#       ports:
+#         - containerPort: 8090
+#       env:
+#         - name: COMPARISON_URL
+#           value: "http://comparison-service:8070"
+#         - name: OLD_SERVICE_URL
+#           value: "http://old-service:9001"
+#       resources:
+#         requests:
+#           cpu: 50m
+#           memory: 64Mi
+#         limits:
+#           cpu: 200m
+#           memory: 128Mi
+#
+# To enable webhook injection on a namespace:
+#   kubectl label namespace <ns> inject-sidecar=true
